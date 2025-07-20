@@ -1,0 +1,570 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Agnirva Natural Disaster Tracker</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <!-- Leaflet CSS -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css" />
+    <!-- Chart.js for statistics -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <!-- Custom Styles -->
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 0;
+            padding: 0;
+            display: flex;
+            flex-direction: column;
+            height: 100vh;
+        }
+        
+        #app-container {
+            display: flex;
+            flex: 1;
+            overflow: hidden;
+        }
+        
+        #sidebar {
+            width: 350px;
+            background-color: #f8f9fa;
+            padding: 15px;
+            overflow-y: auto;
+            border-right: 1px solid #ddd;
+            transition: all 0.3s ease;
+        }
+        
+        #sidebar.collapsed {
+            width: 0;
+            padding: 0;
+            overflow: hidden;
+        }
+        
+        #main-content {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+        
+        #controls {
+            padding: 10px;
+            background-color: #f4f4f4;
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
+            align-items: center;
+        }
+        
+        .control-group {
+            margin-bottom: 0;
+        }
+        
+        #map {
+            flex: 1;
+            width: 100%;
+        }
+        
+        .stat-card {
+            background: white;
+            border-radius: 8px;
+            padding: 15px;
+            margin-bottom: 15px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        
+        .stat-title {
+            font-weight: bold;
+            margin-bottom: 10px;
+            color: #333;
+        }
+        
+        .toggle-sidebar {
+            background: #007bff;
+            color: white;
+            border: none;
+            padding: 5px 10px;
+            border-radius: 4px;
+            cursor: pointer;
+            margin-left: auto;
+        }
+        
+        .map-style-selector {
+            display: flex;
+            gap: 5px;
+        }
+        
+        .map-style-btn {
+            padding: 5px 10px;
+            border: 1px solid #ddd;
+            background: white;
+            border-radius: 4px;
+            cursor: pointer;
+        }
+        
+        .map-style-btn.active {
+            background: #007bff;
+            color: white;
+            border-color: #007bff;
+        }
+        
+        .marker-style-selector {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        
+        .marker-color-preview {
+            width: 20px;
+            height: 20px;
+            border-radius: 50%;
+            border: 1px solid #ddd;
+        }
+        
+        @media (max-width: 768px) {
+            #app-container {
+                flex-direction: column;
+            }
+            
+            #sidebar {
+                width: 100%;
+                height: 300px;
+            }
+            
+            #sidebar.collapsed {
+                height: 0;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div id="app-container">
+        <div id="sidebar">
+            <div class="stat-card">
+                <div class="stat-title">Event Statistics</div>
+                <div id="event-stats"></div>
+            </div>
+            
+            <div class="stat-card">
+                <div class="stat-title">Events by Category</div>
+                <canvas id="categoryChart"></canvas>
+            </div>
+            
+            <div class="stat-card">
+                <div class="stat-title">Events Timeline</div>
+                <canvas id="timelineChart"></canvas>
+            </div>
+        </div>
+        
+        <div id="main-content">
+            <div id="controls">
+                <div class="control-group">
+                    <label for="category">Event Category:</label>
+                    <select id="category">
+                        <option value="">All</option>
+                        <option value="wildfires">Wildfires</option>
+                        <option value="severeStorms">Severe Storms</option>
+                        <option value="volcanoes">Volcanoes</option>
+                        <option value="earthquakes">Earthquakes</option>
+                        <option value="floods">Floods</option>
+                    </select>
+                </div>
+                
+                <div class="control-group">
+                    <label for="days">Past Days:</label>
+                    <input type="number" id="days" value="30" min="1" max="365">
+                </div>
+                
+                <div class="control-group map-style-selector">
+                    <span>Map Style:</span>
+                    <button class="map-style-btn active" data-style="osm">Standard</button>
+                    <button class="map-style-btn" data-style="satellite">Satellite</button>
+                    <button class="map-style-btn" data-style="dark">Dark</button>
+                </div>
+                
+                <div class="control-group marker-style-selector">
+                    <span>Marker Style:</span>
+                    <select id="marker-style">
+                        <option value="default">Default</option>
+                        <option value="severity">By Severity</option>
+                        <option value="category">By Category</option>
+                    </select>
+                    <div class="marker-color-preview" id="marker-preview"></div>
+                </div>
+                
+                <button id="fetchEvents">Fetch Events</button>
+                <button class="toggle-sidebar">Toggle Sidebar</button>
+            </div>
+            
+            <div id="map"></div>
+        </div>
+    </div>
+
+    <!-- Leaflet JS -->
+    <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
+    <!-- Leaflet plugins for additional map styles -->
+    <script src="https://unpkg.com/leaflet.tilelayer.colorfilter/dist/leaflet-tilelayer.colorfilter.min.js"></script>
+    
+    <script>
+        // Initialize variables
+        let map;
+        let currentTileLayer;
+        let eventMarkers = [];
+        let categoryChart;
+        let timelineChart;
+        
+        // Map style configurations
+        const mapStyles = {
+            osm: {
+                name: "OpenStreetMap",
+                url: 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
+                options: {
+                    attribution: '&copy; OpenStreetMap contributors'
+                }
+            },
+            satellite: {
+                name: "Satellite",
+                url: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+                options: {
+                    attribution: 'Tiles &copy; Esri &mdash; Source: Esri, i-cubed, USDA, USGS, AEX, GeoEye, Getmapping, Aerogrid, IGN, IGP, UPR-EGP, and the GIS User Community'
+                }
+            },
+            dark: {
+                name: "Dark",
+                url: 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',
+                options: {
+                    attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>',
+                    subdomains: 'abcd',
+                    maxZoom: 19
+                }
+            }
+        };
+        
+        // Marker styles by category and severity
+        const markerStyles = {
+            category: {
+                wildfires: { color: '#ff4500', icon: '🔥' },
+                severeStorms: { color: '#4682b4', icon: '⛈️' },
+                volcanoes: { color: '#8b0000', icon: '🌋' },
+                earthquakes: { color: '#8b4513', icon: '🌍' },
+                floods: { color: '#1e90ff', icon: '🌊' },
+                default: { color: '#808080', icon: '⚠️' }
+            },
+            severity: {
+                high: { color: '#ff0000', icon: '❗' },
+                medium: { color: '#ffa500', icon: '⚠️' },
+                low: { color: '#32cd32', icon: 'ℹ️' },
+                default: { color: '#808080', icon: '❓' }
+            },
+            default: {
+                color: '#0078ff',
+                icon: '📍'
+            }
+        };
+        
+        // Initialize the application
+        document.addEventListener('DOMContentLoaded', () => {
+            initMap();
+            setupEventListeners();
+            fetchAndDisplayEvents();
+        });
+        
+        function initMap() {
+            // Initialize map with default style
+            map = L.map('map').setView([20, 0], 2);
+            changeMapStyle('osm');
+            
+            // Initialize charts with empty data
+            initCharts();
+        }
+        
+        function changeMapStyle(style) {
+            // Remove current tile layer if exists
+            if (currentTileLayer) {
+                map.removeLayer(currentTileLayer);
+            }
+            
+            // Add new tile layer
+            const styleConfig = mapStyles[style];
+            currentTileLayer = L.tileLayer(styleConfig.url, styleConfig.options).addTo(map);
+            
+            // Update active button state
+            document.querySelectorAll('.map-style-btn').forEach(btn => {
+                btn.classList.toggle('active', btn.dataset.style === style);
+            });
+        }
+        
+        function initCharts() {
+            const categoryCtx = document.getElementById('categoryChart').getContext('2d');
+            const timelineCtx = document.getElementById('timelineChart').getContext('2d');
+            
+            categoryChart = new Chart(categoryCtx, {
+                type: 'bar',
+                data: {
+                    labels: [],
+                    datasets: [{
+                        label: 'Events by Category',
+                        data: [],
+                        backgroundColor: [
+                            'rgba(255, 99, 132, 0.7)',
+                            'rgba(54, 162, 235, 0.7)',
+                            'rgba(255, 206, 86, 0.7)',
+                            'rgba(75, 192, 192, 0.7)',
+                            'rgba(153, 102, 255, 0.7)'
+                        ],
+                        borderWidth: 1
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    scales: {
+                        y: {
+                            beginAtZero: true
+                        }
+                    }
+                }
+            });
+            
+            timelineChart = new Chart(timelineCtx, {
+                type: 'line',
+                data: {
+                    labels: [],
+                    datasets: [{
+                        label: 'Events Over Time',
+                        data: [],
+                        borderColor: 'rgba(75, 192, 192, 1)',
+                        backgroundColor: 'rgba(75, 192, 192, 0.2)',
+                        fill: true,
+                        tension: 0.1
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    scales: {
+                        y: {
+                            beginAtZero: true
+                        }
+                    }
+                }
+            });
+        }
+        
+        function setupEventListeners() {
+            // Fetch events button
+            document.getElementById('fetchEvents').addEventListener('click', fetchAndDisplayEvents);
+            
+            // Map style buttons
+            document.querySelectorAll('.map-style-btn').forEach(btn => {
+                btn.addEventListener('click', () => changeMapStyle(btn.dataset.style));
+            });
+            
+            // Marker style selector
+            document.getElementById('marker-style').addEventListener('change', function() {
+                updateMarkerPreview();
+                if (eventMarkers.length > 0) {
+                    displayEventsOnMap(window.currentEvents);
+                }
+            });
+            
+            // Toggle sidebar
+            document.querySelector('.toggle-sidebar').addEventListener('click', function() {
+                document.getElementById('sidebar').classList.toggle('collapsed');
+            });
+        }
+        
+        function updateMarkerPreview() {
+            const style = document.getElementById('marker-style').value;
+            let previewColor = markerStyles.default.color;
+            
+            if (style === 'category') {
+                previewColor = markerStyles.category.wildfires.color;
+            } else if (style === 'severity') {
+                previewColor = markerStyles.severity.high.color;
+            }
+            
+            document.getElementById('marker-preview').style.backgroundColor = previewColor;
+        }
+        
+        async function fetchAndDisplayEvents() {
+            const category = document.getElementById('category').value;
+            const days = document.getElementById('days').value;
+            
+            let apiUrl = `https://eonet.gsfc.nasa.gov/api/v2.1/events?days=${days}`;
+            
+            if (category) {
+                const categoryMapping = {
+                    wildfires: 8,
+                    severeStorms: 10,
+                    volcanoes: 12,
+                    earthquakes: 16,
+                    floods: 14
+                };
+                const categoryId = categoryMapping[category];
+                apiUrl += `&category=${categoryId}`;
+            }
+            
+            try {
+                const response = await fetch(apiUrl);
+                const data = await response.json();
+                window.currentEvents = data.events;
+                displayEventsOnMap(data.events);
+                updateStatistics(data.events);
+            } catch (error) {
+                console.error('Error fetching events:', error);
+                alert('Failed to fetch events. Please try again later.');
+            }
+        }
+        
+        function displayEventsOnMap(events) {
+            // Clear existing markers
+            eventMarkers.forEach(marker => map.removeLayer(marker));
+            eventMarkers = [];
+            
+            events.forEach(event => {
+                event.geometries.forEach(geometry => {
+                    let coords;
+                    if (geometry.type === "Point") {
+                        coords = geometry.coordinates;
+                        addMarker(coords, event);
+                    } else if (geometry.type === "Polygon") {
+                        coords = geometry.coordinates[0][0];
+                        addMarker(coords, event);
+                    }
+                });
+            });
+        }
+        
+        function addMarker(coords, event) {
+            const markerStyle = getMarkerStyle(event);
+            
+            const marker = L.marker([coords[1], coords[0]], {
+                icon: L.divIcon({
+                    html: `<div style="background-color:${markerStyle.color}; 
+                           color:white; 
+                           border-radius:50%; 
+                           width:30px; 
+                           height:30px; 
+                           display:flex; 
+                           align-items:center; 
+                           justify-content:center;
+                           font-size:16px;
+                           border:2px solid white;">${markerStyle.icon}</div>`,
+                    className: '',
+                    iconSize: [30, 30]
+                })
+            }).addTo(map);
+            
+            marker.bindPopup(`
+                <strong>${event.title}</strong><br>
+                <em>${new Date(event.geometries[0].date).toLocaleDateString()}</em><br>
+                ${event.description ? event.description : ''}
+                ${event.categories ? `<br>Category: ${event.categories[0].title}` : ''}
+            `);
+            
+            eventMarkers.push(marker);
+        }
+        
+        function getMarkerStyle(event) {
+            const style = document.getElementById('marker-style').value;
+            
+            if (style === 'category' && event.categories) {
+                const category = event.categories[0].title.toLowerCase();
+                if (category.includes('wildfire')) {
+                    return markerStyles.category.wildfires;
+                } else if (category.includes('storm')) {
+                    return markerStyles.category.severeStorms;
+                } else if (category.includes('volcano')) {
+                    return markerStyles.category.volcanoes;
+                } else if (category.includes('earthquake')) {
+                    return markerStyles.category.earthquakes;
+                } else if (category.includes('flood')) {
+                    return markerStyles.category.floods;
+                }
+            } else if (style === 'severity') {
+                // Simple severity detection based on event title
+                const title = event.title.toLowerCase();
+                if (title.includes('major') || title.includes('severe') || title.includes('extreme')) {
+                    return markerStyles.severity.high;
+                } else if (title.includes('moderate') || title.includes('medium')) {
+                    return markerStyles.severity.medium;
+                } else {
+                    return markerStyles.severity.low;
+                }
+            }
+            
+            return markerStyles.default;
+        }
+        
+        function updateStatistics(events) {
+            // Update basic stats
+            document.getElementById('event-stats').innerHTML = `
+                <p>Total Events: ${events.length}</p>
+                <p>Date Range: ${getDateRange(events)}</p>
+            `;
+            
+            // Update category chart
+            const categoryCounts = countEventsByCategory(events);
+            categoryChart.data.labels = Object.keys(categoryCounts);
+            categoryChart.data.datasets[0].data = Object.values(categoryCounts);
+            categoryChart.update();
+            
+            // Update timeline chart
+            const timelineData = countEventsByDay(events);
+            timelineChart.data.labels = Object.keys(timelineData);
+            timelineChart.data.datasets[0].data = Object.values(timelineData);
+            timelineChart.update();
+        }
+        
+        function countEventsByCategory(events) {
+            const counts = {};
+            
+            events.forEach(event => {
+                if (event.categories && event.categories.length > 0) {
+                    const category = event.categories[0].title;
+                    counts[category] = (counts[category] || 0) + 1;
+                } else {
+                    counts['Unknown'] = (counts['Unknown'] || 0) + 1;
+                }
+            });
+            
+            return counts;
+        }
+        
+        function countEventsByDay(events) {
+            const counts = {};
+            
+            events.forEach(event => {
+                if (event.geometries && event.geometries.length > 0) {
+                    const date = new Date(event.geometries[0].date).toLocaleDateString();
+                    counts[date] = (counts[date] || 0) + 1;
+                }
+            });
+            
+            // Sort dates chronologically
+            const sortedDates = Object.keys(counts).sort((a, b) => new Date(a) - new Date(b));
+            const sortedCounts = {};
+            
+            sortedDates.forEach(date => {
+                sortedCounts[date] = counts[date];
+            });
+            
+            return sortedCounts;
+        }
+        
+        function getDateRange(events) {
+            if (events.length === 0) return 'N/A';
+            
+            const dates = events
+                .filter(event => event.geometries && event.geometries.length > 0)
+                .map(event => new Date(event.geometries[0].date));
+                
+            if (dates.length === 0) return 'N/A';
+            
+            const minDate = new Date(Math.min(...dates));
+            const maxDate = new Date(Math.max(...dates));
+            
+            return `${minDate.toLocaleDateString()} to ${maxDate.toLocaleDateString()}`;
+        }
+    </script>
+</body>
+</html>
